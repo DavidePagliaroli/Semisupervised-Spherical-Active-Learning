@@ -1,0 +1,288 @@
+import warnings
+# Ignora qualsiasi avviso che contenga "SCS returned 2" nel testo
+warnings.filterwarnings("ignore", message=".*SCS returned 2.*")
+# Ignora preventivamente tutti gli UserWarning che provengono dalla libreria qpsolvers
+warnings.filterwarnings("ignore", category=UserWarning, module=".*qpsolvers.*")
+import numpy as np
+import time as tm
+from sklearn.metrics import accuracy_score
+from algormeter.libs import Kernel
+from DADC import DADC
+
+# ==========================================
+# 1. LA CLASSE DEL PROBLEMA MATEMATICO (Spazio Convesso z, q)
+# ==========================================
+class ProblemaSferico(Kernel):
+    def __init__(self, A, B, X, C1=1.0, C2=1.0, start_v=None):
+        self.d = np.array(X).shape[1]
+        self.dimension = self.d + 2
+        super().__init__(self.dimension) 
+        
+        self.A = np.array(A) if len(A) > 0 else np.empty((0, self.d))
+        self.B = np.array(B) if len(B) > 0 else np.empty((0, self.d))
+        self.X = np.array(X)
+        self.C1 = C1
+        self.C2 = C2
+        self.PENALTY = 1e5
+        
+        # --- LOGICA DI WARM START ---
+        if start_v is not None:
+            # Se abbiamo una sfera precedente, partiamo esattamente da lì
+            self.XStart = np.copy(start_v)
+        else:
+            # Altrimenti (primo avvio), partenza a freddo
+            centro_iniziale = np.mean(self.A, axis=0) if len(self.A) > 0 else np.zeros(self.d)
+            z_iniziale = 1.0       
+            q_iniziale = 0.5 
+            self.XStart = np.concatenate([centro_iniziale, [z_iniziale, q_iniziale]])
+
+    def _unpack(self, v):
+        x0 = np.asarray(v[:-2], dtype=float)
+        z = float(v[-2])
+        q = float(v[-1])
+        return x0, z, q
+
+    # ==========================================
+    # METODI PRINCIPALI DEL DADC
+    # ==========================================
+    def _f1(self, v) -> float:
+        x0, z, q = self._unpack(v)
+
+        a = np.asarray(self.A, dtype=float)
+        b = np.asarray(self.B, dtype=float)
+        x = np.asarray(self.X, dtype=float)
+
+        da = np.sum((a - x0) ** 2, axis=1)
+        db = np.sum((b - x0) ** 2, axis=1)
+        dx = np.sum((x - x0) ** 2, axis=1)
+
+        term_a = self.C1 * np.sum(np.maximum(0.0, q - z + da))
+        term_b = self.C1 * np.sum(np.maximum(q + z, db))
+        term_x = self.C2 * np.sum(np.maximum(dx - z + q, np.maximum(0.0, 2 * (dx - z))))
+        
+        # --- PENALITA' ESATTA ---
+        vincolo_q_positivo = self.PENALTY * max(0.0, -q)      # Si attiva se q < 0
+        vincolo_q_minore_z = self.PENALTY * max(0.0, q - z)   # Si attiva se q > z
+
+        return -q + term_a + term_b + term_x + vincolo_q_positivo + vincolo_q_minore_z
+
+    def _f2(self, v) -> float:
+        x0, z, q = self._unpack(v)
+
+        b = np.asarray(self.B, dtype=float)
+        x = np.asarray(self.X, dtype=float)
+
+        db = np.sum((b - x0) ** 2, axis=1)
+        dx = np.sum((x - x0) ** 2, axis=1)
+
+        term_b = self.C1 * np.sum(db)
+        term_x = self.C2 * np.sum(np.maximum(0.0, 2 * (dx - z)))
+
+        return term_b + term_x
+
+    def _gf1(self, v):
+        x0, z, q = self._unpack(v)
+
+        a = np.asarray(self.A, dtype=float)
+        b = np.asarray(self.B, dtype=float)
+        x = np.asarray(self.X, dtype=float)
+
+        grad_x0 = np.zeros_like(x0)
+        grad_z = 0.0
+        grad_q = -1.0 
+
+        if len(a) > 0:
+            da = np.sum((a - x0) ** 2, axis=1)
+            active_a = (q - z + da) > 0
+            grad_x0 += self.C1 * np.sum(2 * (x0 - a[active_a]), axis=0)
+            grad_z += -self.C1 * np.sum(active_a)
+            grad_q += self.C1 * np.sum(active_a)
+
+        if len(b) > 0:
+            db = np.sum((b - x0) ** 2, axis=1)
+            branch_h = (q + z) >= db
+            grad_x0 += self.C1 * np.sum(2 * (x0 - b[~branch_h]), axis=0)
+            grad_z += self.C1 * np.sum(branch_h)
+            grad_q += self.C1 * np.sum(branch_h)
+
+        if len(x) > 0:
+            dx = np.sum((x - x0) ** 2, axis=1)
+            u = dx - z + q
+            w = 2 * (dx - z)
+            mask_u = u >= np.maximum(0.0, w)
+            mask_w = (~mask_u) & (w > 0)
+
+            grad_x0 += self.C2 * np.sum(2 * (x0 - x[mask_u]), axis=0)
+            grad_z += -self.C2 * np.sum(mask_u)
+            grad_q += self.C2 * np.sum(mask_u)
+
+            grad_x0 += self.C2 * np.sum(4 * (x0 - x[mask_w]), axis=0)
+            grad_z += -2 * self.C2 * np.sum(mask_w)
+
+        # --- GRADIENTE DELLE PENALITA' ---
+        if -q > 0:           
+            grad_q -= self.PENALTY
+        if (q - z) > 0:      
+            grad_q += self.PENALTY
+            grad_z -= self.PENALTY
+
+        return np.concatenate([grad_x0, [grad_z, grad_q]])
+
+    def _gf2(self, v):
+        x0, z, q = self._unpack(v)
+
+        b = np.asarray(self.B, dtype=float)
+        x = np.asarray(self.X, dtype=float)
+
+        grad_x0 = np.zeros_like(x0)
+        grad_z = 0.0
+        grad_q = 0.0  
+
+        if len(b) > 0:
+            grad_x0 += self.C1 * np.sum(2 * (x0 - b), axis=0)
+
+        if len(x) > 0:
+            dx = np.sum((x - x0) ** 2, axis=1)
+            active = 2 * (dx - z) > 0
+            
+            grad_x0 += self.C2 * np.sum(4 * (x0 - x[active]), axis=0)
+            grad_z += -2 * self.C2 * np.sum(active)
+
+        return np.concatenate([grad_x0, [grad_z, grad_q]])
+
+
+# ==========================================
+# 2. LOGICA DELLO ZAINO (Knapsack)
+# ==========================================
+
+# Aggiunto il parametro max_elementi (di default None, ma puoi passargli 10)
+def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=4.0, max_elementi=None):
+    x0 = np.asarray(sfera_v[:-2], dtype=float)
+    z = float(sfera_v[-2])
+    q = float(sfera_v[-1])
+    
+    # 1. Distanze e Valore Informativo (V_j)
+    dist_sq = np.sum((X_unlabeled - x0)**2, axis=1)
+    valori_vj = C2 * np.maximum(0.0, q - np.abs(dist_sq - z))
+    
+    v_max = np.max(valori_vj) if np.max(valori_vj) > 0 else 1.0
+    costi_wj = c_base + W * (valori_vj / v_max)
+    
+    # 2. Preparazione degli elementi per il Branch and Bound
+    oggetti_validi = []
+    for i, (v, w) in enumerate(zip(valori_vj, costi_wj)):
+        if v > 1e-7: 
+            oggetti_validi.append({'idx': i, 'v': v, 'w': w, 'd': v / w})
+            
+    n_items = len(oggetti_validi)
+    if n_items == 0:
+        return [], [], 0.0
+        
+    oggetti_validi.sort(key=lambda x: x['d'], reverse=True)
+    
+    miglior_valore = 0.0
+    miglior_selezione = []
+    
+    # Se non viene specificato un limite, lo settiamo pari al numero di oggetti validi (nessun limite)
+    limite_cardinalita = max_elementi if max_elementi is not None else n_items
+    
+    def calcola_bound(livello, peso_corrente, valore_corrente):
+        if peso_corrente >= budget_attuale:
+            return valore_corrente
+            
+        bound = valore_corrente
+        peso_tot = peso_corrente
+        
+        for j in range(livello, n_items):
+            oggetto = oggetti_validi[j]
+            if peso_tot + oggetto['w'] <= budget_attuale:
+                peso_tot += oggetto['w']
+                bound += oggetto['v']
+            else:
+                spazio_rimanente = budget_attuale - peso_tot
+                bound += spazio_rimanente * oggetto['d']
+                break
+                
+        return bound
+
+    stack = [(0, 0.0, 0.0, [])]
+    
+    while stack:
+        livello, peso_curr, val_curr, sel_curr = stack.pop()
+        
+        if livello == n_items:
+            continue
+            
+        oggetto_corrente = oggetti_validi[livello]
+        
+        # --- RAMO 1: Inclusione (solo se rispettiamo SIA il budget CHE il limite di cardinalità) ---
+        peso_con = peso_curr + oggetto_corrente['w']
+        val_con = val_curr + oggetto_corrente['v']
+        
+        # ECCO LA MAGIA: aggiungiamo len(sel_curr) < limite_cardinalita
+        if peso_con <= budget_attuale and len(sel_curr) < limite_cardinalita:
+            if val_con > miglior_valore:
+                miglior_valore = val_con
+                miglior_selezione = sel_curr + [oggetto_corrente['idx']]
+            
+            bound_con = calcola_bound(livello + 1, peso_con, val_con)
+            if bound_con > miglior_valore:
+                stack.append((livello + 1, peso_con, val_con, sel_curr + [oggetto_corrente['idx']]))
+                
+        # --- RAMO 2: Esclusione dell'oggetto ---
+        bound_senza = calcola_bound(livello + 1, peso_curr, val_curr)
+        
+        if bound_senza > miglior_valore:
+            stack.append((livello + 1, peso_curr, val_curr, sel_curr))
+
+    indici_scelti = miglior_selezione
+    valori_scelti = [valori_vj[i] for i in indici_scelti]
+    costo_speso = sum([costi_wj[i] for i in indici_scelti])
+    
+    return indici_scelti, valori_scelti, costo_speso
+
+
+
+    """
+    # Ricaviamo R e M reali per stampare il log
+    R = (np.sqrt(max(0.0, z + q)) + np.sqrt(max(0.0, z - q))) / 2.0
+    M = (np.sqrt(max(0.0, z + q)) - np.sqrt(max(0.0, z - q))) / 2.0
+    print(f"  [Zaino] Raggio effettivo R={R:.2f}, Margine effettivo M={M:.2f}")
+    """
+
+
+
+# ==========================================
+# 3. CALCOLO ACCURATEZZA DEL MODELLO
+# ==========================================
+def calcola_accuratezza(sfera_v, X_test, y_test, classe_minoritaria, classe_maggioritaria):
+    x0 = np.asarray(sfera_v[:-2], dtype=float)
+    z = float(sfera_v[-2])
+    q = float(sfera_v[-1])
+    
+    radice = np.sqrt(max(0.0, z**2 - q**2))
+    R_sq = (z + radice) / 2.0
+    
+    dist_sq = np.sum((X_test - x0)**2, axis=1)
+    
+    # I punti dentro la sfera appartengono alla classe su cui è centrata
+    y_pred = np.where(dist_sq <= R_sq, classe_minoritaria, classe_maggioritaria)
+    
+    return accuracy_score(y_test, y_pred)
+"""
+def calcola_accuratezza(sfera_v, X_test, y_test):
+    x0 = np.asarray(sfera_v[:-2], dtype=float)
+    z = float(sfera_v[-2])
+    q = float(sfera_v[-1])
+    
+    # Ricaviamo il vero R^2 invertendo il sistema geometrico
+    radice = np.sqrt(max(0.0, z**2 - q**2))
+    R_sq = (z + radice) / 2.0
+    
+    dist_sq = np.sum((X_test - x0)**2, axis=1)
+    
+    # I punti con distanza al quadrato <= R_sq sono dentro la sfera
+    y_pred = np.where(dist_sq <= R_sq, 0, 1)
+    
+    return accuracy_score(y_test, y_pred)
+"""
