@@ -32,8 +32,9 @@ class ProblemaSferico(Kernel):
         else:
             # Altrimenti (primo avvio), partenza a freddo
             centro_iniziale = np.mean(self.A, axis=0) if len(self.A) > 0 else np.zeros(self.d)
-            z_iniziale = 1.0       
-            q_iniziale = 0.5 
+            z_iniziale = 5       
+            q_iniziale = 4
+            "Impostare correttamente i valori di z e q potrebbe essere fondamentale" 
             self.XStart = np.concatenate([centro_iniziale, [z_iniziale, q_iniziale]])
 
     def _unpack(self, v):
@@ -170,6 +171,7 @@ def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=
     
     # 2. Preparazione degli elementi per il Branch and Bound
     oggetti_validi = []
+    print("sto selezionando")
     for i, (v, w) in enumerate(zip(valori_vj, costi_wj)):
         if v > 1e-7: 
             oggetti_validi.append({'idx': i, 'v': v, 'w': w, 'd': v / w})
@@ -238,17 +240,15 @@ def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=
     indici_scelti = miglior_selezione
     valori_scelti = [valori_vj[i] for i in indici_scelti]
     costo_speso = sum([costi_wj[i] for i in indici_scelti])
+
+    R = (np.sqrt(max(0.0, z + q)) + np.sqrt(max(0.0, z - q))) / 2.0
+    M = (np.sqrt(max(0.0, z + q)) - np.sqrt(max(0.0, z - q))) / 2.0
+    print(f"  [Zaino] Raggio effettivo R={R:.2f}, Margine effettivo M={M:.2f}")
     
     return indici_scelti, valori_scelti, costo_speso
 
 
 
-    """
-    # Ricaviamo R e M reali per stampare il log
-    R = (np.sqrt(max(0.0, z + q)) + np.sqrt(max(0.0, z - q))) / 2.0
-    M = (np.sqrt(max(0.0, z + q)) - np.sqrt(max(0.0, z - q))) / 2.0
-    print(f"  [Zaino] Raggio effettivo R={R:.2f}, Margine effettivo M={M:.2f}")
-    """
 
 
 

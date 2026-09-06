@@ -1,26 +1,28 @@
-
 import time as tm
 import numpy as np
 from sklearn.model_selection import StratifiedKFold, train_test_split
+import warnings
 
 # Importa i tuoi moduli
 from dataset_manager import prepara_breast_cancer, prepara_spambase, prepara_ionosphere, prepara_heart, prepara_pima
 from ProblemaSferico import ProblemaSferico, calcola_accuratezza, seleziona_con_zaino
 from DADC import DADC
-import warnings
+
 # Ignora gli avvisi di deprecazione generati dalle librerie sottostanti
 warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
+
 if __name__ == "__main__":
     # 1. Caricamento del dataset intero
-    X, y = prepara_heart()
+    X, y = prepara_breast_cancer()
 
-    BUDGET_GLOBALE = 20
-    BUDGET_QUERY = 4  #"""NON VOGLIO UN BUDGET QUERY MA UN NUMERO MASSIMO DI CAMPIONI CONSIDERATI PER ITERAZIONE"""
+    BUDGET_GLOBALE = 200
+    
     # Parametri di costo eterogeneo per il Knapsack
     c_base = 1.0
     W = 4.0
-    Q = 10
+    Q = 10  # Limite di cardinalità: massimo 10 query per iterazione
+
     # 2. Configurazione della 10-Fold Cross-Validation
     kf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
     accuratezze_finali_folds = []
@@ -47,8 +49,7 @@ if __name__ == "__main__":
             random_state=42
         )
         
-        #l'algoritmo funziona meglio se la classe con la cardinalità minore si trova dentro la sfera
-        
+        # L'algoritmo funziona meglio se la classe con la cardinalità minore si trova dentro la sfera
         # 1. Analizziamo le proporzioni delle classi nel set iniziale
         classi, conteggi = np.unique(y_initial, return_counts=True)
         
@@ -62,27 +63,26 @@ if __name__ == "__main__":
         A = X_initial[y_initial == classe_minoritaria].copy()
         B = X_initial[y_initial == classe_maggioritaria].copy()
         
-        etichette_consumate = 0
+        # Inizializzazione pulita
+        budget_consumato = 0.0
         iterazione = 1
         miglior_acc_fold = 0.0
-
-# Variabile per conservare la memoria della sfera tra un'iterazione e l'altra
         memoria_sfera = None
 
         # --- CICLO DI ACTIVE LEARNING ---
         while budget_consumato < BUDGET_GLOBALE:
+            # Il budget a disposizione del Knapsack in questa iterazione è tutto quello residuo
             budget_rimanente = BUDGET_GLOBALE - budget_consumato
-            richiesta_attuale = min(BUDGET_QUERY, budget_rimanente)
 
-             # Stop se non ci sono dati o se il budget residuo non basta nemmeno per il punto più economico
-            if len(X_unlabeled) == 0 or richiesta_attuale < c_base:
+            # Stop se non ci sono dati o se il budget residuo non basta nemmeno per il punto più economico
+            if len(X_unlabeled) == 0 or budget_rimanente < c_base:
                 break
             
             print(f"\n  [Fold {fold} - Iter {iterazione}] Budget Speso: {budget_consumato:.2f}/{BUDGET_GLOBALE:.2f}")
             print(f"  Stato: |A|={len(A)}, |B|={len(B)}, |X|={len(X_unlabeled)}")
 
             # Addestramento con WARM START
-            prob = ProblemaSferico(A, B, X_unlabeled, C1=0.01, C2=0.01, start_v=memoria_sfera)
+            prob = ProblemaSferico(A, B, X_unlabeled, C1=0.02, C2=0.01, start_v=memoria_sfera)
             DADC(prob)
             
             # Salviamo il risultato per il prossimo ciclo
@@ -96,8 +96,16 @@ if __name__ == "__main__":
                 
             print(f"  [Metriche] Accuratezza Test Set: {acc*100:.2f}%")
 
-            # Selezione con Zaino (Estraiamo anche il costo_speso ed esplicitiamo c_base e W)
-            indici_scelti, valori_vj, costo_speso = seleziona_con_zaino(sfera_ottimizzata, X_unlabeled, richiesta_attuale, prob.C2, c_base, W, Q)
+            # Selezione con Zaino: Passiamo il budget residuo totale e il limite Q
+            indici_scelti, valori_vj, costo_speso = seleziona_con_zaino(
+                sfera_v=sfera_ottimizzata, 
+                X_unlabeled=X_unlabeled, 
+                budget_attuale=budget_rimanente, 
+                C2=prob.C2, 
+                c_base=c_base, 
+                W=W, 
+                max_elementi=Q
+            )
 
             # --- CONDIZIONE DI EARLY STOPPING ---
             if len(indici_scelti) == 0:

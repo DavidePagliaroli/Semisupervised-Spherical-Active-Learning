@@ -28,7 +28,7 @@ def main():
     # 1. SELEZIONE E PREPARAZIONE DATI
     # ---------------------------------------------------------
     # Scegli il dataset decommentando la riga desiderata:
-    X_full, y_full = prepara_breast_cancer()
+    X_full, y_full = prepara_heart()
     #X_full, y_full = prepara_heart()
     #X_full, y_full = prepara_ionosphere()
     #X_full, y_full = prepara_spambase()
@@ -58,7 +58,7 @@ def main():
     # ---------------------------------------------------------
     # 2. INIZIALIZZAZIONE ACTIVE LEARNING
     # ---------------------------------------------------------
-    N_INIT = 150  # Punti etichettati iniziali per classe
+    N_INIT = 20  # Punti etichettati iniziali per classe
     
     # Estrazione indici iniziali per classe 0 (A) e classe 1 (B)
     idx_class_0 = np.where(y_train == 0)[0][:N_INIT]
@@ -72,9 +72,15 @@ def main():
     X_unlabeled = np.delete(X_train, idx_iniziali_usati, axis=0)
     Oracolo_Truth = np.delete(y_train, idx_iniziali_usati)
 
+    # Parametri Knapsack k-KP
+    richieste = 0
+    MAX_ROUND = 10
     BUDGET_GLOBALE = 100
-    BUDGET_QUERY = 10
-    etichette_consumate = 0
+    c_base = 1.0
+    W = 4.0
+    Q = 10  # Limite massimo di query per iterazione
+    
+    budget_consumato = 0.0
     iterazione = 1
     storico_accuratezze = []
 
@@ -86,18 +92,18 @@ def main():
     # --- VARIABILE WARM START ---
     memoria_sfera = None
 
-    while etichette_consumate < BUDGET_GLOBALE:
-        budget_rimanente = BUDGET_GLOBALE - etichette_consumate
-        richiesta_attuale = min(BUDGET_QUERY, budget_rimanente)
+    while budget_consumato < BUDGET_GLOBALE and iterazione <= MAX_ROUND:
+        budget_rimanente = BUDGET_GLOBALE - budget_consumato
 
-        if len(X_unlabeled) < richiesta_attuale or richiesta_attuale == 0:
+        # Stop se non ci sono dati o se il budget residuo non copre il costo base
+        if len(X_unlabeled) == 0 or budget_rimanente < c_base:
             break
             
-        print(f"\n[Iter {iterazione}] Budget Consumato: {etichette_consumate}/{BUDGET_GLOBALE}")
+        print(f"\n[Iter {iterazione}] Budget Consumato: {budget_consumato:.2f}/{BUDGET_GLOBALE:.2f}")
         print(f"  Stato: |A|={len(A)}, |B|={len(B)}, |X|={len(X_unlabeled)}")
 
         # --- A. ADDESTRAMENTO (Con Warm Start) ---
-        prob = ProblemaSferico(A, B, X_unlabeled, C1=1.0, C2=1.0, start_v=memoria_sfera) 
+        prob = ProblemaSferico(A, B, X_unlabeled, C1=0.05, C2=0.005, start_v=memoria_sfera) 
         DADC(prob)
         
         # Salviamo la sfera trovata per usarla come partenza al prossimo giro
@@ -109,20 +115,24 @@ def main():
         storico_accuratezze.append(acc)
         print(f"  [Metriche] Accuratezza Test Set: {acc*100:.2f}%")
 
-        # --- C. SELEZIONE CON ZAINO ---
-        indici_scelti, valori_vj = seleziona_con_zaino(sfera_ottimizzata, X_unlabeled, richiesta_attuale, prob.C2)
-
-        # Filtro: manteniamo solo punti con un valore informativo matematicamente valido
-        soglia_zero = 1e-7
-        indici_informativi = [idx for idx, vj in zip(indici_scelti, valori_vj) if vj > soglia_zero]
+        # --- C. SELEZIONE CON ZAINO (Branch & Bound k-KP) ---
+        indici_scelti, valori_vj, costo_speso = seleziona_con_zaino(
+            sfera_v=sfera_ottimizzata, 
+            X_unlabeled=X_unlabeled, 
+            budget_attuale=budget_rimanente, 
+            C2=prob.C2, 
+            c_base=c_base, 
+            W=W, 
+            max_elementi=Q
+        )
 
         # --- D. EARLY STOPPING ---
-        if len(indici_informativi) == 0:
-            print("  [STOP ANTICIPATO] Valore informativo nullo per tutti i punti. Il modello è stabile.")
+        if len(indici_scelti) == 0:
+            print("  [STOP ANTICIPATO] Nessun punto informativo selezionabile. Modello sicuro o budget insufficiente.")
             break
 
         # --- E. AGGIORNAMENTO ORACOLO ---
-        for idx in sorted(indici_informativi, reverse=True):
+        for idx in sorted(indici_scelti, reverse=True):
             punto = X_unlabeled[idx]
             etichetta_reale = Oracolo_Truth[idx]
 
@@ -130,11 +140,11 @@ def main():
                 A = np.vstack([A, punto])
             else:
                 B = np.vstack([B, punto])
-
+            richieste+=1
             X_unlabeled = np.delete(X_unlabeled, idx, axis=0)
             Oracolo_Truth = np.delete(Oracolo_Truth, idx)
 
-        etichette_consumate += len(indici_informativi)
+        budget_consumato += costo_speso
         iterazione += 1
 
     # ---------------------------------------------------------
@@ -145,8 +155,9 @@ def main():
     print("\n" + "="*60)
     print(" ADDESTRAMENTO COMPLETATO!")
     print(f" Tempo di esecuzione: {tempo_totale:.2f} secondi")
-    print(f" Iterazioni effettuate: {iterazione - 1}")
-    print(f" Etichette totali richieste: {etichette_consumate}")
+    print(f" Iterazioni effettuate: {iterazione -1}")
+    print(f" Budget totale speso: {budget_consumato:.2f}")
+    print(f" Richieste effettuate all'oracolo: {richieste}")
     print(f" Accuratezza Massima Raggiunta: {max(storico_accuratezze)*100:.2f}%")
     print(" Evoluzione Accuratezza:")
     for i, acc in enumerate(storico_accuratezze):
