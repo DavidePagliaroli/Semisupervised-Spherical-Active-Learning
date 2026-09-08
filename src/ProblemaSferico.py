@@ -32,8 +32,8 @@ class ProblemaSferico(Kernel):
         else:
             # Altrimenti (primo avvio), partenza a freddo
             centro_iniziale = np.mean(self.A, axis=0) if len(self.A) > 0 else np.zeros(self.d)
-            z_iniziale = 5       
-            q_iniziale = 4
+            z_iniziale = 2.5 
+            q_iniziale = 1.5
             "Impostare correttamente i valori di z e q potrebbe essere fondamentale" 
             self.XStart = np.concatenate([centro_iniziale, [z_iniziale, q_iniziale]])
 
@@ -157,7 +157,10 @@ class ProblemaSferico(Kernel):
 # ==========================================
 
 # Aggiunto il parametro max_elementi (di default None, ma puoi passargli 10)
-def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=4.0, max_elementi=None):
+
+import numpy as np
+
+def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=4.0, max_elementi=30):
     x0 = np.asarray(sfera_v[:-2], dtype=float)
     z = float(sfera_v[-2])
     q = float(sfera_v[-1])
@@ -169,24 +172,33 @@ def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=
     v_max = np.max(valori_vj) if np.max(valori_vj) > 0 else 1.0
     costi_wj = c_base + W * (valori_vj / v_max)
     
-    # 2. Preparazione degli elementi per il Branch and Bound
+    # 2. Preparazione degli elementi
     oggetti_validi = []
-    print("sto selezionando")
+    
     for i, (v, w) in enumerate(zip(valori_vj, costi_wj)):
         if v > 1e-7: 
             oggetti_validi.append({'idx': i, 'v': v, 'w': w, 'd': v / w})
             
-    n_items = len(oggetti_validi)
-    if n_items == 0:
+    print("\n--- [Zaino Cost-Aware] ---")
+    print(f"Elementi nel margine (V_j > 0): {len(oggetti_validi)}")
+    
+    if len(oggetti_validi) == 0:
         return [], [], 0.0
         
+    # 3. ORDINAMENTO E PRE-SCREENING (Soluzione 3 ottimizzata)
+    # Ordiniamo in modo decrescente per 'd' (Densità = Valore / Costo)
     oggetti_validi.sort(key=lambda x: x['d'], reverse=True)
     
+    # Tagliamo l'input per evitare l'esplosione combinatoria del Branch & Bound
+    if max_elementi is not None and len(oggetti_validi) > max_elementi:
+        oggetti_validi = oggetti_validi[:max_elementi]
+        
+    n_items = len(oggetti_validi)
+    print(f"Elementi inviati al Branch and Bound (Pre-screening top-{max_elementi}): {n_items}")
+    
+    # 4. BRANCH AND BOUND
     miglior_valore = 0.0
     miglior_selezione = []
-    
-    # Se non viene specificato un limite, lo settiamo pari al numero di oggetti validi (nessun limite)
-    limite_cardinalita = max_elementi if max_elementi is not None else n_items
     
     def calcola_bound(livello, peso_corrente, valore_corrente):
         if peso_corrente >= budget_attuale:
@@ -217,12 +229,11 @@ def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=
             
         oggetto_corrente = oggetti_validi[livello]
         
-        # --- RAMO 1: Inclusione (solo se rispettiamo SIA il budget CHE il limite di cardinalità) ---
+        # --- RAMO 1: Inclusione (solo se rispettiamo il budget) ---
         peso_con = peso_curr + oggetto_corrente['w']
         val_con = val_curr + oggetto_corrente['v']
         
-        # ECCO LA MAGIA: aggiungiamo len(sel_curr) < limite_cardinalita
-        if peso_con <= budget_attuale and len(sel_curr) < limite_cardinalita:
+        if peso_con <= budget_attuale:
             if val_con > miglior_valore:
                 miglior_valore = val_con
                 miglior_selezione = sel_curr + [oggetto_corrente['idx']]
@@ -243,13 +254,9 @@ def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=
 
     R = (np.sqrt(max(0.0, z + q)) + np.sqrt(max(0.0, z - q))) / 2.0
     M = (np.sqrt(max(0.0, z + q)) - np.sqrt(max(0.0, z - q))) / 2.0
-    print(f"  [Zaino] Raggio effettivo R={R:.2f}, Margine effettivo M={M:.2f}")
+    print(f"Raggio effettivo R={R:.2f}, Margine effettivo M={M:.2f}")
     
     return indici_scelti, valori_scelti, costo_speso
-
-
-
-
 
 
 # ==========================================

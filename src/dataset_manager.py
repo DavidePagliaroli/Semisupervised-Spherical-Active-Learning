@@ -18,60 +18,7 @@ def prepara_breast_cancer():
     X_scaled = scaler.fit_transform(X_full)
     
     return X_scaled, y_full
-"""
-def prepara_heart():
-    
-    # 1. Usiamo as_frame=False per evitare il blocco del formato ARFF compresso
-    data = fetch_openml(name='heart', version=1, as_frame=False, parser='auto')
-    
-    # 2. Decomprimiamo la matrice sparsa come avevamo fatto all'inizio
-    X_raw = data.data
-    if hasattr(X_raw, 'toarray'):
-        X_raw = X_raw.toarray()
-        
-    # 3. Creiamo noi il DataFrame per permettere al ColumnTransformer di lavorare sui nomi
-    X_df = pd.DataFrame(X_raw, columns=data.feature_names)
-    
-    # Per sicurezza, mettiamo tutti i nomi delle colonne in minuscolo 
-    X_df.columns = X_df.columns.str.lower()
-    
-    y_full = LabelEncoder().fit_transform(data.target)
-    
-    # Definiamo rigorosamente le feature in base alla loro natura clinica
-    # Nota: Assicurati che questi nomi corrispondano esattamente a quelli stampati da print(X_df.columns)
-    # Se il dataset OpenML differisce leggermente, aggiorna questa lista.
-    categorical_features = ['sex', 'cp', 'fbs', 'restecg', 'exang', 'slope', 'ca', 'thal']
-    numeric_features = ['age', 'trestbps', 'chol', 'thalach', 'oldpeak']
-    
-    # Rimuoviamo eventuali feature non presenti nel dataset per evitare errori
-    colonne_presenti = set(X_df.columns)
-    categorical_features = [c for c in categorical_features if c in colonne_presenti]
-    numeric_features = [c for c in numeric_features if c in colonne_presenti]
-    
-    # Pipeline per le numeriche (imputazione mediana + standardizzazione)
-    numeric_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler())
-    ])
-    
-    # Pipeline per le categoriali (imputazione moda + one-hot encoding)
-    categorical_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='most_frequent')),
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
-    ])
-    
-    # Assembliamo il trasformatore globale
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', numeric_transformer, numeric_features),
-            ('cat', categorical_transformer, categorical_features)
-        ])
-    
-    # Applichiamo la trasformazione per ottenere una matrice NumPy densa e geometricamente pura
-    X_processed = preprocessor.fit_transform(X_df)
-    
-    return X_processed, y_full
-"""
+
 def prepara_heart():
     """Carica, imputa e codifica il dataset Heart Disease usando indici posizionali."""
     data = fetch_openml(name='heart', version=1, as_frame=False, parser='auto')
