@@ -9,7 +9,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import VarianceThreshold
 
 def prepara_breast_cancer():
-    """Carica e normalizza il dataset Breast Cancer."""
+    #Carica e normalizza il dataset Breast Cancer."
     data = load_breast_cancer()
     X_full = data.data
     y_full = data.target  
@@ -20,7 +20,7 @@ def prepara_breast_cancer():
     return X_scaled, y_full
 
 def prepara_heart():
-    """Carica, imputa e codifica il dataset Heart Disease usando indici posizionali."""
+    "Carica, imputa e codifica il dataset Heart Disease usando indici posizionali."
     data = fetch_openml(name='heart', version=1, as_frame=False, parser='auto')
     
     # Lavoriamo direttamente con la matrice NumPy pura
@@ -63,7 +63,7 @@ def prepara_heart():
 
 
 def prepara_ionosphere():
-    """Carica, pulisce e mappa correttamente il dataset Ionosphere per modelli Sferici."""
+    "Carica, pulisce e mappa correttamente il dataset Ionosphere per modelli Sferici."
     data = fetch_openml(name='ionosphere', version=1, as_frame=False, parser='auto')
     
     # 1. Imputazione dei valori mancanti
@@ -89,7 +89,7 @@ def prepara_ionosphere():
     return X_final, y_full
 
 def prepara_spambase():
-    """Carica, imputa e normalizza il dataset Spambase."""
+    "Carica, imputa e normalizza il dataset Spambase."
     data = fetch_openml(name='spambase', version=1, as_frame=False, parser='auto')
     
     # Imputa eventuali valori mancanti con la media della colonna
@@ -105,7 +105,7 @@ def prepara_spambase():
     return X_scaled, y_full
 
 def prepara_pima():
-    """Carica, pulisce e mappa correttamente il dataset Pima Indians Diabetes."""
+    "Carica, pulisce e mappa correttamente il dataset Pima Indians Diabetes."
     # 1. Caricamento del dataset da OpenML
     data = fetch_openml(name='diabetes', version=1, as_frame=False, parser='auto')
     
@@ -138,3 +138,115 @@ def prepara_pima():
     X_final = Normalizer(norm='l2').fit_transform(X_scaled)
     
     return X_final, y_full
+"""
+
+import numpy as np
+import pandas as pd
+from sklearn.datasets import load_breast_cancer, fetch_openml
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder, Normalizer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.feature_selection import VarianceThreshold
+
+def prepara_breast_cancer():
+    #Carica il dataset Breast Cancer e prepara la pipeline di normalizzazione.
+    data = load_breast_cancer()
+    X = data.data
+    y = data.target  
+    
+    pipeline = Pipeline([
+        ('scaler', StandardScaler())
+    ])
+    return X, y, pipeline
+
+def prepara_heart():
+    "Carica Heart Disease e prepara la pipeline (imputazione + encoding + proiezione)."
+    data = fetch_openml(name='heart', version=1, as_frame=False, parser='auto')
+    
+    X_raw = data.data
+    if hasattr(X_raw, 'toarray'):
+        X_raw = X_raw.toarray()
+        
+    y = LabelEncoder().fit_transform(data.target)
+    
+    numeric_features_idx = [0, 3, 4, 7, 9]
+    categorical_features_idx = [1, 2, 5, 6, 8, 10, 11, 12]
+    
+    numeric_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler())
+    ])
+    
+    categorical_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='most_frequent')),
+        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
+    ])
+    
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numeric_transformer, numeric_features_idx),
+            ('cat', categorical_transformer, categorical_features_idx)
+        ])
+    
+    # La pipeline unisce tutti i passaggi in sequenza
+    pipeline = Pipeline([
+        ('preprocessor', preprocessor),
+        ('scaler_global', StandardScaler()),
+        ('normalizer', Normalizer(norm='l2'))
+    ])
+    
+    return X_raw, y, pipeline
+
+def prepara_ionosphere():
+    "Carica Ionosphere e prepara la pipeline per imputazione e scaling."
+    data = fetch_openml(name='ionosphere', version=1, as_frame=False, parser='auto')
+    
+    # La mappatura delle classi in 0 e 1 non è leakage, si fa a monte
+    y = np.where(data.target == 'g', 0, 1)
+    
+    pipeline = Pipeline([
+        ('imputer', SimpleImputer(strategy='constant', fill_value=0)),
+        ('selector', VarianceThreshold(threshold=0.0)),
+        ('scaler', StandardScaler()),
+        ('normalizer', Normalizer(norm='l2'))
+    ])
+    
+    return data.data, y, pipeline
+
+def prepara_spambase():
+    "Carica Spambase e prepara la pipeline di pulizia."
+    data = fetch_openml(name='spambase', version=1, as_frame=False, parser='auto')
+    y = LabelEncoder().fit_transform(data.target)
+    
+    pipeline = Pipeline([
+        ('imputer', SimpleImputer(strategy='mean')),
+        ('scaler', StandardScaler())
+    ])
+    
+    return data.data, y, pipeline
+
+def prepara_pima():
+    "Carica Pima, applica le correzioni strutturali e prepara la pipeline."
+    data = fetch_openml(name='diabetes', version=1, as_frame=False, parser='auto')
+    
+    X_raw = data.data
+    if hasattr(X_raw, 'toarray'):
+        X_raw = X_raw.toarray()
+        
+    y = np.where(data.target == 'tested_positive', 0, 1)
+    
+    # Sostituire 0 con NaN basandosi sulla semantica medica non calcola statistiche globali,
+    # quindi NON costituisce Data Leakage. Può restare fuori dalla pipeline.
+    X_df = pd.DataFrame(X_raw)
+    colonne_con_zeri_anomali = [1, 2, 3, 4, 5]
+    X_df[colonne_con_zeri_anomali] = X_df[colonne_con_zeri_anomali].replace(0, np.nan)
+    
+    pipeline = Pipeline([
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler()),
+        ('normalizer', Normalizer(norm='l2'))
+    ])
+    
+    return X_df.values, y, pipeline
+"""
