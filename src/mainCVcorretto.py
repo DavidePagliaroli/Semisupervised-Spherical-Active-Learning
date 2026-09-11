@@ -5,6 +5,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module=".*qpsolvers.*")
 
 import numpy as np
 import time as tm
+from sklearn.base import clone
 from sklearn.model_selection import train_test_split, StratifiedKFold, StratifiedShuffleSplit
 from sklearn.metrics import precision_score, recall_score, f1_score 
 
@@ -12,7 +13,7 @@ from sklearn.metrics import precision_score, recall_score, f1_score
 from DADC import DADC
 from ProblemaSferico import ProblemaSferico, seleziona_con_zaino, calcola_accuratezza
 
-# Importa il tuo gestore dei dataset
+# Importa il tuo gestore dei dataset (versione con pipeline NON fittata)
 from dataset_manager import (
     prepara_breast_cancer, 
     prepara_heart, 
@@ -29,15 +30,21 @@ def main():
     # ---------------------------------------------------------
     # 1. SELEZIONE E PREPARAZIONE DATI
     # ---------------------------------------------------------
-    # Scegli il dataset decommentando la riga desiderata:
-    #X_full, y_full = prepara_breast_cancer()
-    #X_full, y_full = prepara_heart()
-    #X_full, y_full = prepara_ionosphere()
-    X_full, y_full = prepara_spambase()
-    #X_full, y_full = prepara_pima()
+    # Ogni prepara_* ora restituisce (X_raw, y_full, pipeline_template):
+    # X_raw è NON trasformato, pipeline_template è NON fittata.
+    # Il fit vero e proprio avviene dentro il ciclo, fold per fold.
+    #X_raw, y_full, pipeline_template = prepara_breast_cancer()
+    #X_raw, y_full, pipeline_template = prepara_heart()
+    #X_raw, y_full, pipeline_template = prepara_ionosphere()
+    X_raw, y_full, pipeline_template = prepara_spambase()
+    #X_raw, y_full, pipeline_template = prepara_pima()
 
+    X_raw = np.asarray(X_raw)
+    y_full = np.asarray(y_full)
 
     # --- ASSEGNAZIONE TOPOLOGICA DINAMICA ---
+    # Opera solo sulle etichette y (nessuna statistica sulle feature X):
+    # non è leakage, può restare fuori dal ciclo dei fold.
     valori_unici, conteggi = np.unique(y_full, return_counts=True)
     classe_minoritaria_orig = valori_unici[np.argmin(conteggi)]
     classe_maggioritaria_orig = valori_unici[np.argmax(conteggi)]
@@ -53,7 +60,7 @@ def main():
     # Parametri Modello Geometrico (Sfera)
     C1_val = 0.01   # Per Spambase potresti voler usare 0.1
     C2_val = 0.01   # Per Spambase avevamo stabilito 0.1
-    PERCENTUALE_INIZIALE = 0.073 # 10% del train set di ogni fold 0.063 con 77 pm 1.88 / 0.072 con 77.83 pm 6.89. ha dato i migliori risultati per ora 
+    PERCENTUALE_INIZIALE = 0.072 # 10% del train set di ogni fold 0.063 con 77 pm 1.88 / 0.072 con 77.83 pm 6.89. ha dato i migliori risultati per ora 
     
     # Parametri Knapsack k-KP
     MAX_ROUND = 15
@@ -61,9 +68,9 @@ def main():
     BUDGET_PER_ITERAZIONE = 80.0
     c_base = 1.0
     W = 4.0
-    MAX_SAMPLE = 50 
+    MAX_SAMPLE = 30
     
-    K_FOLDS = 5
+    K_FOLDS = 10
     skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=42)
     #sss = StratifiedShuffleSplit(n_splits=K_FOLDS, test_size=0.3, random_state=42)
     # Strutture dati per salvare i risultati di tutti i fold
@@ -81,18 +88,25 @@ def main():
     # ---------------------------------------------------------
     # 3. CICLO SUI FOLD DELLA CROSS-VALIDATION
     # ---------------------------------------------------------
-    for fold, (train_idx, test_idx) in enumerate(skf.split(X_full, y_full), 1):
+    for fold, (train_idx, test_idx) in enumerate(skf.split(X_raw, y_full), 1):
         print("\n" + "*"*70)
         print(f" ESECUZIONE FOLD {fold}/{K_FOLDS}")
         print("*"*70)
         
         tempo_inizio_fold = tm.time()
         
-        # Divisione in Train e Test per questo specifico fold
-        X_train, X_test = X_full[train_idx], X_full[test_idx]
+        # Divisione in Train e Test (dati ANCORA grezzi, non trasformati)
+        X_train_raw, X_test_raw = X_raw[train_idx], X_raw[test_idx]
         y_train, y_test = y_full[train_idx], y_full[test_idx]
+
+        # --- FIT DEL PREPROCESSING SOLO SUL TRAIN DI QUESTO FOLD ---
+        # clone() garantisce una pipeline "vergine" ad ogni fold, senza
+        # ereditare statistiche (medie, varianze, categorie) dai fold precedenti.
+        pipeline = clone(pipeline_template)
+        X_train = pipeline.fit_transform(X_train_raw)
+        X_test = pipeline.transform(X_test_raw)
         
-        # Estrazione del 10% di Seed
+        # Estrazione del 10% di Seed (ora sui dati già trasformati)
         X_seed, X_unlabeled, y_seed, Oracolo_Truth = train_test_split(
             X_train, y_train, 
             train_size=PERCENTUALE_INIZIALE, 

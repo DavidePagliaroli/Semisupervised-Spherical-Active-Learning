@@ -10,9 +10,9 @@ from sklearn.metrics import precision_score, recall_score, f1_score
 
 # Importa le classi del tuo modello
 from DADC import DADC
-from ProblemaSferico import ProblemaSferico, seleziona_con_zaino, calcola_accuratezza
+from ProblemaSferico import ProblemaSferico, seleziona_con_zaino, calcola_accuratezza, seleziona_casualmente, seleziona_per_prossimità
 
-# Importa il tuo gestore dei dataset
+# Importa il tuo gestore dei dataset (versione con pipeline NON fittata)
 from dataset_manager import (
     prepara_breast_cancer, 
     prepara_heart, 
@@ -25,16 +25,33 @@ def main():
     print("="*60)
     print(" AVVIO ADDESTRAMENTO ACTIVE LEARNING (SPLIT 70-30)")
     print("="*60)
-    
+    RS = 42
+    PERCENTUALE_INIZIALE = 0.1  #0.2    temo 74,74
+    MAX_ROUND = 25
+    BUDGET_GLOBALE = 300
+    BUDGET_PER_ITERAZIONE = 60 #20, 60
+    c_base = 1.0
+    W = 4.0
+    MAX_SAMPLE = 50
+    C1 = 0.01
+    C2 = 0.01
     # ---------------------------------------------------------
     # 1. SELEZIONE E PREPARAZIONE DATI
     # ---------------------------------------------------------
-    #X_full, y_full = prepara_breast_cancer()
-    #X_full, y_full = prepara_heart()
-    #X_full, y_full = prepara_ionosphere()
-    X_full, y_full = prepara_spambase()
-    #X_full, y_full = prepara_pima()
-    
+    # Ogni prepara_* restituisce (X_raw, y_full, pipeline):
+    # X_raw è NON trasformato, pipeline è NON fittata.
+    #X_raw, y_full, pipeline = prepara_breast_cancer()
+    #X_raw, y_full, pipeline = prepara_heart()
+    #X_raw, y_full, pipeline = prepara_ionosphere()
+    X_raw, y_full, pipeline = prepara_spambase()
+    #X_raw, y_full, pipeline = prepara_pima()
+
+    X_raw = np.asarray(X_raw)
+    y_full = np.asarray(y_full)
+
+    # --- ASSEGNAZIONE TOPOLOGICA DINAMICA ---
+    # Opera solo sulle etichette y (nessuna statistica sulle feature X):
+    # non è leakage, può restare prima dello split.
     valori_unici, conteggi = np.unique(y_full, return_counts=True)
     classe_minoritaria_orig = valori_unici[np.argmin(conteggi)]
     classe_maggioritaria_orig = valori_unici[np.argmax(conteggi)]
@@ -44,58 +61,29 @@ def main():
     
     y_full = np.where(y_full == classe_minoritaria_orig, 0, 1)
     
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_full, y_full, test_size=0.30, random_state=42, stratify=y_full
+    # Split sui dati ancora GREZZI (nessuna statistica globale calcolata finora)
+    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+        X_raw, y_full, test_size=0.30, random_state=RS, stratify=y_full
     )
 
-    print(f" [Dataset] Training Set: {X_train.shape[0]} campioni")
-    print(f" [Dataset] Test Set: {X_test.shape[0]} campioni")
-    """
-    # ---------------------------------------------------------
-    # 1. SELEZIONE E PREPARAZIONE DATI
-    # ---------------------------------------------------------
-    
-    # 1. Recupero dati grezzi e pipeline non ancora addestrata
-    #X_raw, y_full, pipeline = prepara_breast_cancer()
-    X_raw, y_full, pipeline = prepara_heart()
-    #X_raw, y_full, pipeline = prepara_ionosphere()
-    #X_raw, y_full, pipeline = prepara_spambase()
-    #X_raw, y_full, pipeline = prepara_pima()
-    
-    valori_unici, conteggi = np.unique(y_full, return_counts=True)
-    classe_minoritaria_orig = valori_unici[np.argmin(conteggi)]
-    classe_maggioritaria_orig = valori_unici[np.argmax(conteggi)]
-    
-    print(f" [Topologia] Classe Minoritaria '{classe_minoritaria_orig}' -> mappata a 0 (Set A, DENTRO)")
-    print(f" [Topologia] Classe Maggioritaria '{classe_maggioritaria_orig}' -> mappata a 1 (Set B, FUORI)")
-    
-    y_full = np.where(y_full == classe_minoritaria_orig, 0, 1)
-    
-    # 2. Split sui dati ancora GREZZI (Nessuna statistica globale calcolata)
-    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
-        X_raw, y_full, test_size=0.3, stratify=y_full, random_state=42
-    )
-    
-    # 3. APPLICAZIONE DELLA PIPELINE (Rimozione Data Leakage)
+    # --- FIT DEL PREPROCESSING SOLO SUL TRAINING SET ---
     print(" [Pre-processing] Addestramento scaler/imputer SOLO sul Training Set...")
-    # Il fit_transform calcola media/varianza SOLO sul 70% dei dati e li scala
+    # fit_transform calcola media/varianza (ecc.) SOLO sul 70% di training
     X_train = pipeline.fit_transform(X_train_raw)
-    
-    # Il transform usa le regole imparate sopra per scalare il 30% dei dati di test (senza sbirciare)
+    # transform riusa le regole apprese sul train per trasformare il test, senza sbirciare
     X_test = pipeline.transform(X_test_raw)
 
     print(f" [Dataset] Training Set: {X_train.shape[0]} campioni (Standardizzati)")
     print(f" [Dataset] Test Set: {X_test.shape[0]} campioni (Standardizzati)")
-    """
+
     # ---------------------------------------------------------
     # 2. INIZIALIZZAZIONE ACTIVE LEARNING (COLD START)
     # ---------------------------------------------------------
-    PERCENTUALE_INIZIALE = 0.2  #0.2
-    
+
     X_seed, X_unlabeled, y_seed, Oracolo_Truth = train_test_split(
         X_train, y_train, 
         train_size=PERCENTUALE_INIZIALE, 
-        random_state=42, 
+        random_state=RS, 
         stratify=y_train
     )
     
@@ -104,19 +92,15 @@ def main():
     A = X_seed[y_seed == 0]
     B = X_seed[y_seed == 1]
     
+    #A = X_train[y_train == 0]
+    #B = X_train[y_train == 1] #necessarie per testare l'algoritmo con approccio supervisionato
+    #X_unlabeled = np.empty((0, X_train.shape[1]))
+    
     if len(A) == 0 or len(B) == 0:
         raise ValueError("Il campionamento iniziale non contiene almeno un rappresentante per ciascuna classe.")
 
     # Parametri Active Learning
     richieste = 0
-    MAX_ROUND = 15
-    BUDGET_GLOBALE = 700
-    BUDGET_PER_ITERAZIONE = 80.0
-    c_base = 1.0
-    W = 4.0
-    MAX_SAMPLE = 60
-    C1 = 0.01
-    C2 = 0.01
     budget_consumato = 0.0
     iterazione = 1
     storico_accuratezze = [] # (accuratezza, numero_campioni_etichettati)
@@ -157,14 +141,14 @@ def main():
 
         # --- A. SELEZIONE CON ZAINO (basata sulla sfera attuale) ---
         budget_zaino = min(BUDGET_PER_ITERAZIONE, budget_rimanente)
-        indici_scelti, valori_vj, costo_speso = seleziona_con_zaino(
+        indici_scelti, valori_vj, costo_speso = seleziona_con_zaino( 
             sfera_v=sfera_ottimizzata, 
             X_unlabeled=X_unlabeled, 
             budget_attuale=budget_zaino, 
             C2=prob.C2, 
             c_base=c_base, 
             W=W, 
-            max_elementi=MAX_SAMPLE
+            max_elementi=MAX_SAMPLE 
         )
 
         # --- B. EARLY STOPPING (Margine o Budget) ---

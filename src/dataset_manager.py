@@ -7,7 +7,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder, N
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import VarianceThreshold
-
+"""
 def prepara_breast_cancer():
     #Carica e normalizza il dataset Breast Cancer."
     data = load_breast_cancer()
@@ -88,17 +88,20 @@ def prepara_ionosphere():
     
     return X_final, y_full
 
+from sklearn.datasets import fetch_openml
+from sklearn.preprocessing import StandardScaler, LabelEncoder, Normalizer
+from sklearn.impute import SimpleImputer
+
 def prepara_spambase():
-    "Carica, imputa e normalizza il dataset Spambase."
+    "Carica, imputa e standardizza Spambase SENZA proiezione sferica."
     data = fetch_openml(name='spambase', version=1, as_frame=False, parser='auto')
     
-    # Imputa eventuali valori mancanti con la media della colonna
     imputer = SimpleImputer(strategy='mean')
     X_full = imputer.fit_transform(data.data)
     
-    # Converte le etichette in 0 e 1
     y_full = LabelEncoder().fit_transform(data.target)
     
+    # Lo StandardScaler mantiene intatte le proporzioni e le distanze vettoriali originali
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_full)
     
@@ -249,4 +252,3 @@ def prepara_pima():
     ])
     
     return X_df.values, y, pipeline
-"""
