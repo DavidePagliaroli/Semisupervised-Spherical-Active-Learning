@@ -7,7 +7,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
 
-# Stesso gestore dataset usato per il modello a sfera (pipeline NON fittata)
 from dataset_manager import prepara_spambase
 
 
@@ -23,7 +22,6 @@ def main():
     X_raw = np.asarray(X_raw)
     y_full = np.asarray(y_full)
 
-    # --- ASSEGNAZIONE TOPOLOGICA (stessa convenzione del modello a sfera) ---
     valori_unici, conteggi = np.unique(y_full, return_counts=True)
     classe_minoritaria_orig = valori_unici[np.argmin(conteggi)]
     classe_maggioritaria_orig = valori_unici[np.argmax(conteggi)]
@@ -40,7 +38,6 @@ def main():
         X_raw, y_full, test_size=0.30, random_state=42, stratify=y_full
     )
 
-    # --- Fit del preprocessing SOLO sul training set (no leakage) ---
     print(" [Pre-processing] Addestramento scaler/imputer SOLO sul Training Set...")
     X_train = pipeline.fit_transform(X_train_raw)
     X_test = pipeline.transform(X_test_raw)

@@ -6,14 +6,13 @@ warnings.filterwarnings("ignore", category=UserWarning, module=".*qpsolvers.*")
 import numpy as np
 import time as tm
 from sklearn.base import clone
-from sklearn.model_selection import train_test_split, StratifiedKFold, StratifiedShuffleSplit
+from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.metrics import precision_score, recall_score, f1_score 
 
 # Importa le classi del tuo modello
 from DADC import DADC
 from ProblemaSferico import ProblemaSferico, seleziona_con_zaino, calcola_accuratezza
 
-# Importa il tuo gestore dei dataset (versione con pipeline NON fittata)
 from dataset_manager import (
     prepara_breast_cancer, 
     prepara_heart, 
@@ -30,9 +29,6 @@ def main():
     # ---------------------------------------------------------
     # 1. SELEZIONE E PREPARAZIONE DATI
     # ---------------------------------------------------------
-    # Ogni prepara_* ora restituisce (X_raw, y_full, pipeline_template):
-    # X_raw è NON trasformato, pipeline_template è NON fittata.
-    # Il fit vero e proprio avviene dentro il ciclo, fold per fold.
     #X_raw, y_full, pipeline_template = prepara_breast_cancer()
     #X_raw, y_full, pipeline_template = prepara_heart()
     #X_raw, y_full, pipeline_template = prepara_ionosphere()
@@ -42,9 +38,6 @@ def main():
     X_raw = np.asarray(X_raw)
     y_full = np.asarray(y_full)
 
-    # --- ASSEGNAZIONE TOPOLOGICA DINAMICA ---
-    # Opera solo sulle etichette y (nessuna statistica sulle feature X):
-    # non è leakage, può restare fuori dal ciclo dei fold.
     valori_unici, conteggi = np.unique(y_full, return_counts=True)
     classe_minoritaria_orig = valori_unici[np.argmin(conteggi)]
     classe_maggioritaria_orig = valori_unici[np.argmax(conteggi)]
@@ -57,12 +50,11 @@ def main():
     # ---------------------------------------------------------
     # 2. PARAMETRI ACTIVE LEARNING E MODELLO
     # ---------------------------------------------------------
-    # Parametri Modello Geometrico (Sfera)
-    C1_val = 0.01   # Per Spambase potresti voler usare 0.1
-    C2_val = 0.01   # Per Spambase avevamo stabilito 0.1
-    PERCENTUALE_INIZIALE = 0.072 # 10% del train set di ogni fold 0.063 con 77 pm 1.88 / 0.072 con 77.83 pm 6.89. ha dato i migliori risultati per ora 
+
+    C1_val = 0.01  
+    C2_val = 0.01   
+    PERCENTUALE_INIZIALE = 0.072 
     
-    # Parametri Knapsack k-KP
     MAX_ROUND = 15
     BUDGET_GLOBALE = 700.0
     BUDGET_PER_ITERAZIONE = 80.0
@@ -72,8 +64,6 @@ def main():
     
     K_FOLDS = 10
     skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=42)
-    #sss = StratifiedShuffleSplit(n_splits=K_FOLDS, test_size=0.3, random_state=42)
-    # Strutture dati per salvare i risultati di tutti i fold
     risultati_cv = {
         'accuracy': [],
         'precision': [],
@@ -95,18 +85,13 @@ def main():
         
         tempo_inizio_fold = tm.time()
         
-        # Divisione in Train e Test (dati ANCORA grezzi, non trasformati)
         X_train_raw, X_test_raw = X_raw[train_idx], X_raw[test_idx]
         y_train, y_test = y_full[train_idx], y_full[test_idx]
 
-        # --- FIT DEL PREPROCESSING SOLO SUL TRAIN DI QUESTO FOLD ---
-        # clone() garantisce una pipeline "vergine" ad ogni fold, senza
-        # ereditare statistiche (medie, varianze, categorie) dai fold precedenti.
         pipeline = clone(pipeline_template)
         X_train = pipeline.fit_transform(X_train_raw)
         X_test = pipeline.transform(X_test_raw)
         
-        # Estrazione del 10% di Seed (ora sui dati già trasformati)
         X_seed, X_unlabeled, y_seed, Oracolo_Truth = train_test_split(
             X_train, y_train, 
             train_size=PERCENTUALE_INIZIALE, 
@@ -120,7 +105,6 @@ def main():
         if len(A) == 0 or len(B) == 0:
             raise ValueError(f"Fold {fold}: Il seed non contiene rappresentanti per entrambe le classi.")
 
-        # Variabili di stato per l'Active Learning di questo fold
         budget_consumato = 0.0
         iterazione = 1
         richieste = 0
@@ -143,7 +127,6 @@ def main():
             if len(X_unlabeled) == 0 or budget_rimanente < c_base:
                 break
 
-            # Selezione con Zaino
             budget_zaino = min(BUDGET_PER_ITERAZIONE, budget_rimanente)
             indici_scelti, valori_vj, costo_speso = seleziona_con_zaino(
                 sfera_v=sfera_ottimizzata, 
@@ -155,12 +138,10 @@ def main():
                 max_elementi=MAX_SAMPLE
             )
 
-            # Early Stopping
             if len(indici_scelti) == 0:
                 print(f"  [Iter {iterazione}] STOP ANTICIPATO (Modello sicuro o budget insufficiente).")
                 break
 
-            # Aggiornamento Oracolo
             for idx in sorted(indici_scelti, reverse=True):
                 punto = X_unlabeled[idx]
                 etichetta_reale = Oracolo_Truth[idx]
@@ -175,13 +156,11 @@ def main():
             budget_consumato += costo_speso
             totale_etichettati = len(A) + len(B)
             
-            # Nuovo Addestramento
             prob = ProblemaSferico(A, B, X_unlabeled, C1=C1_val, C2=C2_val, start_v=memoria_sfera) 
             DADC(prob)
             sfera_ottimizzata = prob.Xk 
             memoria_sfera = np.copy(sfera_ottimizzata)
             
-            # Valutazione
             acc = calcola_accuratezza(sfera_ottimizzata, X_test, y_test, 0, 1)
             print(f"  [Iter {iterazione}] Acc: {acc*100:.2f}% | Budget: {budget_consumato:.1f}/{BUDGET_GLOBALE:.1f} | Tot etichettati: {totale_etichettati}")
             
@@ -200,7 +179,6 @@ def main():
         rec_finale = recall_score(y_test, y_pred, average='macro', zero_division=0)
         f1_finale = f1_score(y_test, y_pred, average='macro', zero_division=0)
 
-        # Salvataggio nelle strutture dati globali
         risultati_cv['accuracy'].append(acc_finale)
         risultati_cv['precision'].append(prec_finale)
         risultati_cv['recall'].append(rec_finale)
@@ -211,7 +189,7 @@ def main():
         print(f"  -> RISULTATI FOLD {fold}: Accuracy={acc_finale*100:.2f}%, Query={richieste}, Tempo={tempo_fold:.1f}s")
 
     # ---------------------------------------------------------
-    # 4. RIEPILOGO GLOBALE 10-FOLD CV (FORMATO TABELLA LATEX)
+    # 4. RIEPILOGO GLOBALE 10-FOLD CV
     # ---------------------------------------------------------
     tempo_totale_cv = tm.time() - tempo_inizio_cv
     

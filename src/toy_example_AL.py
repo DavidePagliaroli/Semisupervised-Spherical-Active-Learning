@@ -1,19 +1,3 @@
-"""
-Regressione Logistica con Active Learning
-==========================================
-Script che:
-1. Genera un dataset sintetico a due classi gaussiane (-1, +1).
-2. Visualizza il dataset nello spazio delle feature 2D.
-3. Addestra un modello di regressione logistica su 20 punti casuali,
-   stampandone accuratezza e confine decisionale.
-4. Seleziona le 20 istanze del "pool" più vicine al confine decisionale
-   del modello 1, le aggiunge al training set e riaddestra il modello,
-   ristampando accuratezza e confine decisionale.
-5. Usa un test set fisso, separato dal pool, per valutare in modo
-   onesto e confrontabile l'accuratezza dei due modelli (vedi nota
-   sotto "TRAIN/TEST SPLIT").
-"""
-
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LogisticRegression
@@ -37,20 +21,6 @@ X_pos = rng.normal(loc=MEAN_POS, scale=SIGMA, size=(N_PER_CLASS, 2))
 X = np.vstack([X_neg, X_pos])
 y = np.concatenate([-np.ones(N_PER_CLASS), np.ones(N_PER_CLASS)])
 
-# ------------------------------------------------------------------
-# TRAIN/TEST SPLIT — perché serve
-# ------------------------------------------------------------------
-# Valutare un modello sugli stessi punti con cui è stato addestrato
-# darebbe un'accuratezza ottimisticamente distorta (specialmente con
-# soli 20 esempi, dove il rischio di overfitting/instabilità è alto).
-# Per questo teniamo da parte un TEST SET fisso, mai usato per
-# addestrare né per scegliere le istanze in active learning: è l'unico
-# modo per confrontare in modo onesto l'accuratezza del modello 1 e
-# del modello 2 sugli stessi dati "mai visti".
-# Il resto dei dati forma il "pool": simula i dati non ancora
-# etichettati, da cui vengono pescati sia il campione casuale iniziale
-# (punto 3), sia le istanze più vicine al confine (punto 4).
-# ------------------------------------------------------------------
 X_pool, X_test, y_pool, y_test = train_test_split(
     X, y, test_size=0.30, stratify=y, random_state=RANDOM_STATE
 )
@@ -124,8 +94,6 @@ acc_1 = accuracy_score(y_test, y_pred_1)
 print(f"[Modello 1] Addestrato su {n_initial} punti casuali "
       f"- Accuratezza sul test set: {acc_1:.4f}")
 
-# Resto del pool: da qui pescheremo, al punto 4, le istanze più vicine
-# al confine decisionale del modello 1
 idx_remaining = np.setdiff1d(idx_pool, idx_initial)
 X_remaining = X_pool[idx_remaining]
 y_remaining = y_pool[idx_remaining]
@@ -139,19 +107,13 @@ plot_decision_boundary(
 # ------------------------------------------------------------------
 # 4. ACTIVE LEARNING: LE 20 ISTANZE PIU' VICINE AL CONFINE
 # ------------------------------------------------------------------
-# La distanza (con segno) di un punto dal confine è proporzionale al
-# valore assoluto della decision_function; poiché la norma di w è
-# costante per un dato modello, ordinare per |decision_function|
-# equivale a ordinare per distanza euclidea dal confine.
+
 distances = np.abs(model_1.decision_function(X_remaining))
 idx_closest_local = np.argsort(distances)[:20]  #MODIFICARE IL NUMERO DI ELEMENTI SELEZIONATI
 
 X_new = X_remaining[idx_closest_local]
 y_new = y_remaining[idx_closest_local]
 
-# Le nuove istanze si aggiungono a quelle già etichettate (classico
-# schema di active learning: il training set cresce in modo
-# incrementale, non viene sostituito)
 X_train_2 = np.vstack([X_train_1, X_new])
 y_train_2 = np.concatenate([y_train_1, y_new])
 

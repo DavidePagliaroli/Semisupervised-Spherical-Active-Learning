@@ -25,21 +25,20 @@ def main():
     print("="*60)
     print(" AVVIO ADDESTRAMENTO ACTIVE LEARNING (SPLIT 70-30)")
     print("="*60)
-    RS = 42
-    PERCENTUALE_INIZIALE = 0.1  #0.2    temo 74,74
-    MAX_ROUND = 25
-    BUDGET_GLOBALE = 300
-    BUDGET_PER_ITERAZIONE = 60 #20, 60
+    RS = 67                  #44, 47 falliscono
+    PERCENTUALE_INIZIALE = 0.1 #0.2    temo 74,74
+    MAX_ROUND = 50
+    BUDGET_GLOBALE = 500
+    BUDGET_PER_ITERAZIONE = 30 #20, 60
     c_base = 1.0
     W = 4.0
-    MAX_SAMPLE = 50
+    MAX_SAMPLE = 30
     C1 = 0.01
     C2 = 0.01
     # ---------------------------------------------------------
     # 1. SELEZIONE E PREPARAZIONE DATI
     # ---------------------------------------------------------
-    # Ogni prepara_* restituisce (X_raw, y_full, pipeline):
-    # X_raw è NON trasformato, pipeline è NON fittata.
+
     #X_raw, y_full, pipeline = prepara_breast_cancer()
     #X_raw, y_full, pipeline = prepara_heart()
     #X_raw, y_full, pipeline = prepara_ionosphere()
@@ -49,9 +48,6 @@ def main():
     X_raw = np.asarray(X_raw)
     y_full = np.asarray(y_full)
 
-    # --- ASSEGNAZIONE TOPOLOGICA DINAMICA ---
-    # Opera solo sulle etichette y (nessuna statistica sulle feature X):
-    # non è leakage, può restare prima dello split.
     valori_unici, conteggi = np.unique(y_full, return_counts=True)
     classe_minoritaria_orig = valori_unici[np.argmin(conteggi)]
     classe_maggioritaria_orig = valori_unici[np.argmax(conteggi)]
@@ -61,23 +57,19 @@ def main():
     
     y_full = np.where(y_full == classe_minoritaria_orig, 0, 1)
     
-    # Split sui dati ancora GREZZI (nessuna statistica globale calcolata finora)
     X_train_raw, X_test_raw, y_train, y_test = train_test_split(
         X_raw, y_full, test_size=0.30, random_state=RS, stratify=y_full
     )
 
-    # --- FIT DEL PREPROCESSING SOLO SUL TRAINING SET ---
     print(" [Pre-processing] Addestramento scaler/imputer SOLO sul Training Set...")
-    # fit_transform calcola media/varianza (ecc.) SOLO sul 70% di training
     X_train = pipeline.fit_transform(X_train_raw)
-    # transform riusa le regole apprese sul train per trasformare il test, senza sbirciare
     X_test = pipeline.transform(X_test_raw)
 
     print(f" [Dataset] Training Set: {X_train.shape[0]} campioni (Standardizzati)")
     print(f" [Dataset] Test Set: {X_test.shape[0]} campioni (Standardizzati)")
 
     # ---------------------------------------------------------
-    # 2. INIZIALIZZAZIONE ACTIVE LEARNING (COLD START)
+    # 2. INIZIALIZZAZIONE ACTIVE LEARNING
     # ---------------------------------------------------------
 
     X_seed, X_unlabeled, y_seed, Oracolo_Truth = train_test_split(
@@ -103,11 +95,11 @@ def main():
     richieste = 0
     budget_consumato = 0.0
     iterazione = 1
-    storico_accuratezze = [] # (accuratezza, numero_campioni_etichettati)
+    storico_accuratezze = [] 
     tempo_inizio = tm.time()
 
     # ---------------------------------------------------------
-    # 3. MODELLO INIZIALE (PRIMA DI QUALSIASI ITERAZIONE)
+    # 3. MODELLO INIZIALE 
     # ---------------------------------------------------------
     print("\n" + "-"*60)
     print(" FASE INIZIALE: CALCOLO MODELLO BASE (ZERO ITERAZIONI)")
@@ -141,7 +133,7 @@ def main():
 
         # --- A. SELEZIONE CON ZAINO (basata sulla sfera attuale) ---
         budget_zaino = min(BUDGET_PER_ITERAZIONE, budget_rimanente)
-        indici_scelti, valori_vj, costo_speso = seleziona_con_zaino( 
+        indici_scelti, valori_vj, costo_speso = seleziona_casualmente( 
             sfera_v=sfera_ottimizzata, 
             X_unlabeled=X_unlabeled, 
             budget_attuale=budget_zaino, 
@@ -185,8 +177,7 @@ def main():
         storico_accuratezze.append((acc, totale_etichettati))
         print(f"  [Metriche] ACCURATEZZA ITERAZIONE {iterazione}: {acc*100:.2f}%")
         
-        # --- F. CONTROLLO DEGRADO PRESTAZIONI (Patience = 2) ---
-        # Controlliamo se l'accuratezza è scesa rispetto al round precedente
+        # --- F. CONTROLLO DEGRADO PRESTAZIONI ---
         if len(storico_accuratezze) >= 2:
             acc_corrente = storico_accuratezze[-1][0]
             acc_precedente = storico_accuratezze[-2][0]
@@ -194,9 +185,9 @@ def main():
             if acc_corrente <= acc_precedente:
                 cali_consecutivi += 1
             else:
-                cali_consecutivi = 0 # Reset se migliora o rimane stabile
+                cali_consecutivi = 0 
                 
-            if cali_consecutivi >= 2:
+            if cali_consecutivi >= 3:
                 print(f"  [STOP ANTICIPATO] Accuratezza in calo per {cali_consecutivi} iterazioni consecutive. Arresto per prevenire l'Outlier Chasing.")
                 break
         
@@ -207,7 +198,6 @@ def main():
     # ---------------------------------------------------------
     tempo_totale = tm.time() - tempo_inizio
     
-    # Ricostruiamo la geometria finale
     x0_final = np.asarray(sfera_ottimizzata[:-2], dtype=float)
     z_final = float(sfera_ottimizzata[-2])
     dist_sq_test = np.sum((X_test - x0_final)**2, axis=1)

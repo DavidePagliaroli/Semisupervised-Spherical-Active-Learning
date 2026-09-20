@@ -9,9 +9,9 @@ from sklearn.metrics import accuracy_score
 from algormeter.libs import Kernel
 from DADC import DADC
 
-#questa seconda versione presenta un meccanismo per evitare M == 0
+
 # ==========================================
-# 1. LA CLASSE DEL PROBLEMA MATEMATICO (Spazio Convesso z, q)
+# 1. LA CLASSE DEL PROBLEMA MATEMATICO 
 # ==========================================
 class ProblemaSferico(Kernel):
     def __init__(self, A, B, X, C1=1.0, C2=1.0, start_v=None):
@@ -25,11 +25,9 @@ class ProblemaSferico(Kernel):
         self.C1 = C1
         self.C2 = C2
         self.PENALTY = 1e5
-        
-        # --- EPSILON-TUBE (Margine strettamente positivo) ---
+       
         self.epsilon = 1e-2
         
-        # --- LOGICA DI WARM START ---
         if start_v is not None:
             self.XStart = np.copy(start_v)
         else:
@@ -62,7 +60,7 @@ class ProblemaSferico(Kernel):
         term_b = self.C1 * np.sum(np.maximum(q + z, db))
         term_x = self.C2 * np.sum(np.maximum(dx - z + q, np.maximum(0.0, 2 * (dx - z))))
         
-        # --- PENALITA' ESATTA MODIFICATA (Epsilon-Tube) ---
+        # --- PENALITA' ---
         vincolo_q_positivo = self.PENALTY * max(0.0, self.epsilon - q)  # Si attiva se q < epsilon
         vincolo_q_minore_z = self.PENALTY * max(0.0, q - z)             # Si attiva se q > z
 
@@ -121,7 +119,6 @@ class ProblemaSferico(Kernel):
             grad_x0 += self.C2 * np.sum(4 * (x0 - x[mask_w]), axis=0)
             grad_z += -2 * self.C2 * np.sum(mask_w)
 
-        # --- GRADIENTE DELLE PENALITA' MODIFICATO (Epsilon-Tube) ---
         if (self.epsilon - q) > 0:            
             grad_q -= self.PENALTY
         if (q - z) > 0:      
@@ -131,7 +128,7 @@ class ProblemaSferico(Kernel):
         return np.concatenate([grad_x0, [grad_z, grad_q]])
 
     def _gf2(self, v):
-        # [Mantenuta identica]
+       
         x0, z, q = self._unpack(v)
 
         b = np.asarray(self.B, dtype=float)
@@ -152,12 +149,10 @@ class ProblemaSferico(Kernel):
             grad_z += -2 * self.C2 * np.sum(active)
 
         return np.concatenate([grad_x0, [grad_z, grad_q]])
-#"""
+
 # ==========================================
 # 2. LOGICA DELLO ZAINO (Knapsack)
 # ==========================================
-
-# Aggiunto il parametro max_elementi (di default None, ma puoi passargli 10)
 
 import numpy as np
 
@@ -168,14 +163,14 @@ def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=
     R = (np.sqrt(max(0.0, z + q)) + np.sqrt(max(0.0, z - q))) / 2.0
     M = (np.sqrt(max(0.0, z + q)) - np.sqrt(max(0.0, z - q))) / 2.0
     print(f"Raggio effettivo R={R:.2f}, Margine effettivo M={M:.2f}")
-    # 1. Distanze e Valore Informativo (V_j)
+   
     dist_sq = np.sum((X_unlabeled - x0)**2, axis=1)
     valori_vj = C2 * np.maximum(0.0, q - np.abs(dist_sq - z))
     
     v_max = np.max(valori_vj) if np.max(valori_vj) > 0 else 1.0
     costi_wj = c_base + W * (valori_vj / v_max)
     
-    # 2. Preparazione degli elementi
+
     oggetti_validi = []
     
     for i, (v, w) in enumerate(zip(valori_vj, costi_wj)):
@@ -188,18 +183,16 @@ def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=
     if len(oggetti_validi) == 0:
         return [], [], 0.0
         
-    # 3. ORDINAMENTO E PRE-SCREENING (Soluzione 3 ottimizzata)
-    # Ordiniamo in modo decrescente per 'd' (Densità = Valore / Costo)
     oggetti_validi.sort(key=lambda x: x['d'], reverse=True)
     
-    # Tagliamo l'input per evitare l'esplosione combinatoria del Branch & Bound
+    
     if max_elementi is not None and len(oggetti_validi) > max_elementi:
         oggetti_validi = oggetti_validi[:max_elementi]
         
     n_items = len(oggetti_validi)
     print(f"Elementi inviati al Branch and Bound (Pre-screening top-{max_elementi}): {n_items}")
     
-    # 4. BRANCH AND BOUND
+
     miglior_valore = 0.0
     miglior_selezione = []
     
@@ -232,7 +225,6 @@ def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=
             
         oggetto_corrente = oggetti_validi[livello]
         
-        # --- RAMO 1: Inclusione (solo se rispettiamo il budget) ---
         peso_con = peso_curr + oggetto_corrente['w']
         val_con = val_curr + oggetto_corrente['v']
         
@@ -245,7 +237,6 @@ def seleziona_con_zaino(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, W=
             if bound_con > miglior_valore:
                 stack.append((livello + 1, peso_con, val_con, sel_curr + [oggetto_corrente['idx']]))
                 
-        # --- RAMO 2: Esclusione dell'oggetto ---
         bound_senza = calcola_bound(livello + 1, peso_curr, val_curr)
         
         if bound_senza > miglior_valore:
@@ -267,23 +258,19 @@ def seleziona_per_prossimità(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1
     z = float(sfera_v[-2])
     q = float(sfera_v[-1])
     
-    # 1. Distanze e Valore Informativo (V_j)
     dist_sq = np.sum((X_unlabeled - x0)**2, axis=1)
     valori_vj = C2 * np.maximum(0.0, q - np.abs(dist_sq - z))
     
     v_max = np.max(valori_vj) if np.max(valori_vj) > 0 else 1.0
-    costi_wj = c_base + W * (valori_vj / v_max)
-    
-    # 2. Preparazione degli elementi validi (solo quelli nel margine)
+    costi_wj = c_base + W * (valori_vj / v_max)   
+  
     oggetti_validi = []
     for i, (v, w) in enumerate(zip(valori_vj, costi_wj)):
         if v > 1e-7: 
             oggetti_validi.append({'idx': i, 'v': v, 'w': w})
             
-    # 3. Ordinamento Greedy basato SOLO sul Valore Informativo (dal più grande al più piccolo)
     oggetti_ordinati = sorted(oggetti_validi, key=lambda x: x['v'], reverse=True)
     
-    # 4. Selezione rigorosa Top-Down
     elementi_selezionati = []
     costo_totale = 0.0
     
@@ -292,8 +279,6 @@ def seleziona_per_prossimità(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1
             elementi_selezionati.append(obj['idx'])
             costo_totale += obj['w']
         else:
-            # STOP RIGOROSO: se non può permettersi l'elemento corrente (il prossimo più informativo),
-            # si ferma per non snaturare la logica puramente basata sul margine.
             break
             
     return elementi_selezionati, valori_vj, costo_totale
@@ -307,23 +292,19 @@ def seleziona_casualmente(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, 
     z = float(sfera_v[-2])
     q = float(sfera_v[-1])
     
-    # 1. Distanze e Valore Informativo (V_j)
     dist_sq = np.sum((X_unlabeled - x0)**2, axis=1)
     valori_vj = C2 * np.maximum(0.0, q - np.abs(dist_sq - z))
     
     v_max = np.max(valori_vj) if np.max(valori_vj) > 0 else 1.0
     costi_wj = c_base + W * (valori_vj / v_max)
     
-    # 2. Preparazione degli elementi validi (esclusivamente quelli nel margine)
     oggetti_validi = []
     for i, (v, w) in enumerate(zip(valori_vj, costi_wj)):
         if v > 1e-7: 
             oggetti_validi.append({'idx': i, 'v': v, 'w': w})
             
-    # 3. Ordinamento puramente casuale (sostituisce l'euristica basata su V_j)
     np.random.shuffle(oggetti_validi)
     
-    # 4. Selezione rigorosa Top-Down sulla lista mescolata
     elementi_selezionati = []
     costo_totale = 0.0
     
@@ -332,10 +313,8 @@ def seleziona_casualmente(sfera_v, X_unlabeled, budget_attuale, C2, c_base=1.0, 
             elementi_selezionati.append(obj['idx'])
             costo_totale += obj['w']
         else:
-            # STOP RIGOROSO: si ferma al primo elemento estratto che eccede il budget
             break
             
-    # Restituisce le tre variabili con la stessa identica firma delle altre varianti
     return elementi_selezionati, valori_vj, costo_totale
 
 # ==========================================
@@ -351,7 +330,6 @@ def calcola_accuratezza(sfera_v, X_test, y_test, classe_minoritaria, classe_magg
     
     dist_sq = np.sum((X_test - x0)**2, axis=1)
     
-    # I punti dentro la sfera appartengono alla classe su cui è centrata
     y_pred = np.where(dist_sq <= R_sq, classe_minoritaria, classe_maggioritaria)
     
     return accuracy_score(y_test, y_pred)
